@@ -1,5 +1,4 @@
 import streamlit as st
-from transformers import pipeline
 import PyPDF2
 import io
 import re
@@ -10,7 +9,18 @@ from reportlab.lib.units import cm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 import datetime
-import os
+import nltk
+from nltk.tokenize import sent_tokenize
+from nltk.corpus import stopwords
+from collections import Counter
+import heapq
+
+# تحميل بيانات NLTK (مرة واحدة)
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
+    nltk.download('stopwords')
 
 # ========================================
 # إعدادات الصفحة
@@ -71,21 +81,80 @@ def read_file(uploaded_file):
         return content.decode("utf-8")
 
 # ========================================
-# تحميل النماذج (مرة واحدة)
+# دالة التلخيص (TextRank)
 # ========================================
-@st.cache_resource
-def load_models():
-    with st.spinner("⏳ جاري تحميل نماذج الذكاء الاصطناعي..."):
-        # نموذج تلخيص أقوى
-        summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-        classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
-    return summarizer, classifier
+def summarize_text(text, num_sentences=5):
+    """تلخيص النص باستخدام خوارزمية TextRank"""
+    # تقسيم النص إلى جمل
+    sentences = sent_tokenize(text)
+    
+    if len(sentences) <= num_sentences:
+        return text
+    
+    # إزالة كلمات التوقف
+    stop_words = set(stopwords.words('arabic') + stopwords.words('english'))
+    
+    # حساب تكرار الكلمات
+    word_freq = Counter()
+    for sentence in sentences:
+        words = re.findall(r'\w+', sentence.lower())
+        for word in words:
+            if word not in stop_words:
+                word_freq[word] += 1
+    
+    # تطبيع التكرارات
+    max_freq = max(word_freq.values()) if word_freq else 1
+    for word in word_freq:
+        word_freq[word] = word_freq[word] / max_freq
+    
+    # حساب درجة كل جملة
+    sentence_scores = {}
+    for sentence in sentences:
+        words = re.findall(r'\w+', sentence.lower())
+        score = sum(word_freq.get(word, 0) for word in words)
+        sentence_scores[sentence] = score
+    
+    # اختيار أفضل الجمل
+    summarized_sentences = heapq.nlargest(num_sentences, sentence_scores, key=sentence_scores.get)
+    summary = ' '.join(summarized_sentences)
+    
+    return summary
 
-try:
-    summarizer, classifier = load_models()
-except Exception as e:
-    st.error(f"❌ مشكلة في تحميل النماذج: {str(e)}")
-    st.stop()
+# ========================================
+# دالة تصنيف النص (بسيطة وسريعة)
+# ========================================
+def classify_text(text):
+    """تصنيف النص باستخدام الكلمات المفتاحية"""
+    categories = {
+        "مالي": ["مال", "اقتصاد", "بنك", "استثمار", "سوق", "أسهم", "دولار", "ربح", "خسارة", "ضريبة"],
+        "طبي": ["طبي", "صحي", "مرض", "علاج", "دواء", "جراحة", "تشخيص", "مستشفى", "طبيب", "صحة"],
+        "تقني": ["تقني", "برمجة", "حاسوب", "ذكاء اصطناعي", "بيانات", "خوارزمية", "تطبيق", "موقع", "برنامج", "تكنولوجيا"],
+        "قانوني": ["قانون", "محكمة", "عقد", "دعوى", "محامي", "حكم", "تشريع", "حقوق", "إجراء", "قضائي"],
+        "تعليمي": ["تعليم", "مدرسة", "جامعة", "طالب", "معلم", "منهج", "دراسة", "بحث", "علمي", "أكاديمي"],
+        "تسويقي": ["تسويق", "إعلان", "علامة تجارية", "عملاء", "مبيعات", "عرض", "ترويج", "منتج", "خدمة", "سوق"],
+        "سياسي": ["سياسي", "حكومة", "برلمان", "انتخاب", "وزير", "رئيس", "قرار", "أمة", "دستور", "حزب"],
+        "اجتماعي": ["اجتماعي", "مجتمع", "أسرة", "ثقافة", "سكان", "تنمية", "فقر", "بطالة", "تعاون", "تكافل"],
+        "رياضي": ["رياضي", "كرة", "ملعب", "لاعب", "مدرب", "بطولة", "مباراة", "نادي", "جمباز", "سباق"],
+        "ديني": ["ديني", "إسلامي", "مسجد", "صلاة", "قرآن", "حديث", "فتوى", "إيمان", "عقيدة", "عبادة"],
+        "فني": ["فني", "فن", "موسيقى", "رسم", "مسرح", "سينما", "تمثيل", "غناء", "تشكيل", "أدب"]
+    }
+    
+    text_lower = text.lower()
+    category_scores = {}
+    
+    for category, keywords in categories.items():
+        score = sum(1 for keyword in keywords if keyword in text_lower)
+        category_scores[category] = score
+    
+    if max(category_scores.values()) == 0:
+        return "عام", 0.5
+    
+    best_category = max(category_scores, key=category_scores.get)
+    best_score = category_scores[best_category]
+    max_possible = len(categories[best_category])
+    confidence = best_score / max_possible if max_possible > 0 else 0
+    
+    return best_category, min(confidence, 0.95)
 
 # ========================================
 # رفع الملف
@@ -105,7 +174,7 @@ if uploaded_file is not None:
         st.text(clean_text_content[:1000] + ("..." if len(clean_text_content) > 1000 else ""))
 
     # ========================================
-    # التلخيص (باستخدام BART)
+    # التلخيص (سريع ومضمون)
     # ========================================
     st.divider()
     st.subheader("📝 الملخص")
@@ -116,14 +185,7 @@ if uploaded_file is not None:
     else:
         with st.spinner("⏳ جاري تلخيص النص..."):
             try:
-                # BART بياخد نص طويل ويلخصه
-                result = summarizer(
-                    clean_text_content,
-                    max_length=150,
-                    min_length=50,
-                    do_sample=False
-                )
-                summary = result[0]['summary_text']
+                summary = summarize_text(clean_text_content, num_sentences=5)
                 st.success("✅ تم التلخيص بنجاح!")
             except Exception as e:
                 st.error(f"❌ مش قادر ألخص النص: {str(e)}")
@@ -132,17 +194,14 @@ if uploaded_file is not None:
     st.write(summary)
 
     # ========================================
-    # التصنيف
+    # التصنيف (سريع ومضمون)
     # ========================================
     st.divider()
     st.subheader("🏷️ التصنيف")
 
     with st.spinner("⏳ جاري تصنيف النص..."):
         try:
-            labels = ["مالي", "طبي", "تقني", "قانوني", "تعليمي", "تسويقي", "سياسي", "اجتماعي", "رياضي", "ديني", "فني"]
-            result = classifier(clean_text_content[:1000], labels)
-            label = result['labels'][0]
-            score = result['scores'][0]
+            label, score = classify_text(clean_text_content)
             st.success("✅ تم التصنيف بنجاح!")
         except Exception as e:
             st.error(f"❌ مش قادر أصنف النص: {str(e)}")
@@ -206,29 +265,24 @@ if uploaded_file is not None:
     ═══════════════════════════════════════════════════════════════
     """
 
-    # دالة لإنشاء PDF
     def create_pdf(text, summary, label, score, word_count, char_count, sentence_count):
         buffer = io.BytesIO()
         c = canvas.Canvas(buffer, pagesize=A4)
         width, height = A4
         
-        # استخدام خط عربي
         try:
             pdfmetrics.registerFont(TTFont('ArialUnicode', 'ArialUnicodeMS.ttf'))
             font_name = 'ArialUnicode'
         except:
             font_name = 'Helvetica'
         
-        # العنوان
         c.setFont(font_name, 20)
         c.drawString(2*cm, height - 2*cm, "تقرير تحليل المستند")
         c.line(2*cm, height - 2.5*cm, width - 2*cm, height - 2.5*cm)
         
-        # التاريخ
         c.setFont(font_name, 12)
         c.drawString(2*cm, height - 3.5*cm, f"التاريخ: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
         
-        # النتيجة
         c.setFont(font_name, 14)
         c.drawString(2*cm, height - 5*cm, f"التصنيف: {label}")
         c.drawString(2*cm, height - 6*cm, f"نسبة الثقة: {score:.2%}")
@@ -236,7 +290,6 @@ if uploaded_file is not None:
         c.drawString(2*cm, height - 8*cm, f"عدد الأحرف: {char_count}")
         c.drawString(2*cm, height - 9*cm, f"عدد الجمل: {sentence_count}")
         
-        # الملخص
         c.setFont(font_name, 12)
         c.drawString(2*cm, height - 11*cm, "الملخص:")
         
@@ -250,7 +303,6 @@ if uploaded_file is not None:
             c.drawString(2*cm, y, line)
             y -= 0.6*cm
         
-        # النص الأصلي (مختصر)
         c.setFont(font_name, 10)
         c.drawString(2*cm, y - 1*cm, "النص الأصلي (مختصر):")
         y -= 1.5*cm
@@ -264,7 +316,6 @@ if uploaded_file is not None:
             c.drawString(2*cm, y, line)
             y -= 0.5*cm
         
-        # التذييل
         c.setFont(font_name, 10)
         c.drawString(2*cm, 2*cm, "تم إنشاء التقرير بواسطة تطبيق ملخص المستندات الذكي")
         
@@ -272,7 +323,6 @@ if uploaded_file is not None:
         buffer.seek(0)
         return buffer
 
-    # أزرار التحميل
     col1, col2 = st.columns(2)
     
     with col1:
