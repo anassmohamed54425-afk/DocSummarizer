@@ -4,7 +4,13 @@ import PyPDF2
 import io
 import re
 from docx import Document
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 import datetime
+import os
 
 # ========================================
 # إعدادات الصفحة
@@ -15,9 +21,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# ========================================
-# CSS للشكل الاحترافي
-# ========================================
 st.markdown("""
 <style>
     .main-header {
@@ -28,26 +31,9 @@ st.markdown("""
         color: white;
         margin-bottom: 30px;
     }
-    .result-card {
-        background: white;
-        padding: 25px;
-        border-radius: 15px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-        margin: 20px 0;
-        border-right: 6px solid #4A6CF7;
-    }
-    .metric-box {
-        background: #F8FAFC;
-        padding: 15px;
-        border-radius: 10px;
-        text-align: center;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-# ========================================
-# رأس الصفحة
-# ========================================
 st.markdown("""
 <div class="main-header">
     <h1 style="font-size: 40px; margin: 0;">📄 ملخص المستندات الذكي</h1>
@@ -62,52 +48,36 @@ st.markdown("""
 # ========================================
 
 def clean_text(text):
-    """تنظيف النص من الزخارف والرموز"""
     text = re.sub(r'[═─▄▀█░▒▓▔▕▖▗▘▙▚▛▜▝▞▟■□▢▣▤▥▦▧▨▩▪▫▬▭▮▯]', '', text)
     text = re.sub(r'\n\s*\n', '\n\n', text)
     text = re.sub(r'═+', '', text)
     text = re.sub(r'─+', '', text)
-    text = re.sub(r'[=]+', '', text)
-    text = re.sub(r'[-]+', '', text)
     return text.strip()
 
 def read_file(uploaded_file):
-    """قراءة أنواع مختلفة من الملفات"""
     content = uploaded_file.read()
     filename = uploaded_file.name
-    
     if filename.endswith('.pdf'):
-        try:
-            pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
-            text = ""
-            for page in pdf_reader.pages:
-                extracted = page.extract_text()
-                if extracted:
-                    text += extracted + "\n"
-            return text.strip() if text.strip() else "⚠️ لا يمكن استخراج نص من هذا PDF"
-        except Exception as e:
-            return f"❌ خطأ في قراءة PDF: {str(e)}"
+        pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text()
+        return text
     elif filename.endswith('.docx'):
-        try:
-            doc = Document(io.BytesIO(content))
-            text = "\n".join([para.text for para in doc.paragraphs])
-            return text
-        except Exception as e:
-            return f"❌ خطأ في قراءة DOCX: {str(e)}"
+        doc = Document(io.BytesIO(content))
+        text = "\n".join([para.text for para in doc.paragraphs])
+        return text
     else:
-        try:
-            return content.decode("utf-8")
-        except:
-            return "❌ خطأ في قراءة الملف"
+        return content.decode("utf-8")
 
 # ========================================
 # تحميل النماذج (مرة واحدة)
 # ========================================
 @st.cache_resource
 def load_models():
-    with st.spinner("⏳ جاري تحميل نماذج الذكاء الاصطناعي (قد يستغرق دقيقة)..."):
-        # ✅ من غير framework="tf"
-        summarizer = pipeline("text-generation", model="google/flan-t5-base")
+    with st.spinner("⏳ جاري تحميل نماذج الذكاء الاصطناعي..."):
+        # نموذج تلخيص أقوى
+        summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
         classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
     return summarizer, classifier
 
@@ -125,37 +95,35 @@ uploaded_file = st.file_uploader("📂 اختر ملف", type=["txt", "pdf", "do
 if uploaded_file is not None:
     try:
         text = read_file(uploaded_file)
-        if text.startswith("❌") or text.startswith("⚠️"):
-            st.error(text)
-            st.stop()
     except Exception as e:
         st.error(f"❌ مشكلة في قراءة الملف: {str(e)}")
         st.stop()
 
-    # تنظيف النص
     clean_text_content = clean_text(text)
 
-    # عرض النص الأصلي
     with st.expander("📄 النص الأصلي"):
         st.text(clean_text_content[:1000] + ("..." if len(clean_text_content) > 1000 else ""))
 
     # ========================================
-    # التلخيص
+    # التلخيص (باستخدام BART)
     # ========================================
     st.divider()
     st.subheader("📝 الملخص")
 
-    if len(clean_text_content.split()) < 30:
-        st.warning("⚠️ النص قصير جداً (أقل من 30 كلمة)")
+    if len(clean_text_content.split()) < 50:
+        st.warning("⚠️ النص قصير جداً (أقل من 50 كلمة)")
         summary = clean_text_content
     else:
         with st.spinner("⏳ جاري تلخيص النص..."):
             try:
-                prompt = f"Summarize this text in one short paragraph: {clean_text_content[:500]}"
-                result = summarizer(prompt, max_new_tokens=150, do_sample=False)
-                summary = result[0]['generated_text']
-                # تنظيف الملخص من أي زخارف
-                summary = re.sub(r'Summarize this text in one short paragraph:\s*', '', summary)
+                # BART بياخد نص طويل ويلخصه
+                result = summarizer(
+                    clean_text_content,
+                    max_length=150,
+                    min_length=50,
+                    do_sample=False
+                )
+                summary = result[0]['summary_text']
                 st.success("✅ تم التلخيص بنجاح!")
             except Exception as e:
                 st.error(f"❌ مش قادر ألخص النص: {str(e)}")
@@ -172,8 +140,7 @@ if uploaded_file is not None:
     with st.spinner("⏳ جاري تصنيف النص..."):
         try:
             labels = ["مالي", "طبي", "تقني", "قانوني", "تعليمي", "تسويقي", "سياسي", "اجتماعي", "رياضي", "ديني", "فني"]
-            clean_for_classify = clean_text_content[:1000]
-            result = classifier(clean_for_classify, labels)
+            result = classifier(clean_text_content[:1000], labels)
             label = result['labels'][0]
             score = result['scores'][0]
             st.success("✅ تم التصنيف بنجاح!")
@@ -207,9 +174,10 @@ if uploaded_file is not None:
         st.metric("عدد الجمل", sentence_count)
 
     # ========================================
-    # تحميل التقرير
+    # تحميل التقرير (PDF + TXT)
     # ========================================
     st.divider()
+    st.subheader("📥 تحميل التقرير")
 
     report_text = f"""
     ═══════════════════════════════════════════════════════════════
@@ -238,12 +206,95 @@ if uploaded_file is not None:
     ═══════════════════════════════════════════════════════════════
     """
 
-    st.download_button(
-        label="📥 تحميل التقرير (TXT)",
-        data=report_text,
-        file_name=f"تقرير_{uploaded_file.name}.txt",
-        mime="text/plain"
-    )
+    # دالة لإنشاء PDF
+    def create_pdf(text, summary, label, score, word_count, char_count, sentence_count):
+        buffer = io.BytesIO()
+        c = canvas.Canvas(buffer, pagesize=A4)
+        width, height = A4
+        
+        # استخدام خط عربي
+        try:
+            pdfmetrics.registerFont(TTFont('ArialUnicode', 'ArialUnicodeMS.ttf'))
+            font_name = 'ArialUnicode'
+        except:
+            font_name = 'Helvetica'
+        
+        # العنوان
+        c.setFont(font_name, 20)
+        c.drawString(2*cm, height - 2*cm, "تقرير تحليل المستند")
+        c.line(2*cm, height - 2.5*cm, width - 2*cm, height - 2.5*cm)
+        
+        # التاريخ
+        c.setFont(font_name, 12)
+        c.drawString(2*cm, height - 3.5*cm, f"التاريخ: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        
+        # النتيجة
+        c.setFont(font_name, 14)
+        c.drawString(2*cm, height - 5*cm, f"التصنيف: {label}")
+        c.drawString(2*cm, height - 6*cm, f"نسبة الثقة: {score:.2%}")
+        c.drawString(2*cm, height - 7*cm, f"عدد الكلمات: {word_count}")
+        c.drawString(2*cm, height - 8*cm, f"عدد الأحرف: {char_count}")
+        c.drawString(2*cm, height - 9*cm, f"عدد الجمل: {sentence_count}")
+        
+        # الملخص
+        c.setFont(font_name, 12)
+        c.drawString(2*cm, height - 11*cm, "الملخص:")
+        
+        y = height - 12*cm
+        for line in summary.split('\n'):
+            if y < 2*cm:
+                c.showPage()
+                y = height - 2*cm
+            if len(line) > 80:
+                line = line[:80] + "..."
+            c.drawString(2*cm, y, line)
+            y -= 0.6*cm
+        
+        # النص الأصلي (مختصر)
+        c.setFont(font_name, 10)
+        c.drawString(2*cm, y - 1*cm, "النص الأصلي (مختصر):")
+        y -= 1.5*cm
+        
+        for line in text[:500].split('\n'):
+            if y < 2*cm:
+                c.showPage()
+                y = height - 2*cm
+            if len(line) > 80:
+                line = line[:80] + "..."
+            c.drawString(2*cm, y, line)
+            y -= 0.5*cm
+        
+        # التذييل
+        c.setFont(font_name, 10)
+        c.drawString(2*cm, 2*cm, "تم إنشاء التقرير بواسطة تطبيق ملخص المستندات الذكي")
+        
+        c.save()
+        buffer.seek(0)
+        return buffer
+
+    # أزرار التحميل
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.download_button(
+            label="📥 تحميل التقرير (TXT)",
+            data=report_text,
+            file_name=f"تقرير_{uploaded_file.name}.txt",
+            mime="text/plain"
+        )
+    
+    with col2:
+        with st.spinner("⏳ جاري إنشاء PDF..."):
+            pdf_buffer = create_pdf(
+                clean_text_content, summary, label, score,
+                word_count, char_count, sentence_count
+            )
+            st.download_button(
+                label="📥 تحميل التقرير (PDF)",
+                data=pdf_buffer,
+                file_name=f"تقرير_{uploaded_file.name}.pdf",
+                mime="application/pdf"
+            )
 
 else:
     st.info("⏳ انتظر رفع ملف لتحليله")
@@ -252,5 +303,5 @@ else:
     1. اضغط على زر **"اختر ملف"**
     2. اختر ملف `.txt` أو `.pdf` أو `.docx`
     3. انتظر لحظات وستظهر النتيجة
-    4. يمكنك تحميل التقرير
+    4. يمكنك تحميل التقرير بصيغة TXT أو PDF
     """)
