@@ -15,7 +15,7 @@ from nltk.corpus import stopwords
 from collections import Counter
 import heapq
 
-# تحميل بيانات NLTK (مرة واحدة)
+# تحميل بيانات NLTK
 try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
@@ -23,38 +23,7 @@ except LookupError:
     nltk.download('stopwords')
 
 # ========================================
-# إعدادات الصفحة
-# ========================================
-st.set_page_config(
-    page_title="ملخص المستندات الذكي",
-    page_icon="📄",
-    layout="wide"
-)
-
-st.markdown("""
-<style>
-    .main-header {
-        background: linear-gradient(135deg, #4A6CF7, #6C4AF7);
-        padding: 30px;
-        border-radius: 15px;
-        text-align: center;
-        color: white;
-        margin-bottom: 30px;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown("""
-<div class="main-header">
-    <h1 style="font-size: 40px; margin: 0;">📄 ملخص المستندات الذكي</h1>
-    <p style="font-size: 18px; opacity: 0.9; margin: 10px 0 0;">
-        رفع ملف، تلخيص، تصنيف، وتقرير PDF
-    </p>
-</div>
-""", unsafe_allow_html=True)
-
-# ========================================
-# دوال التنظيف والتحليل
+# دوال التلخيص والتصنيف (خفيفة)
 # ========================================
 
 def clean_text(text):
@@ -80,21 +49,12 @@ def read_file(uploaded_file):
     else:
         return content.decode("utf-8")
 
-# ========================================
-# دالة التلخيص (TextRank)
-# ========================================
-def summarize_text(text, num_sentences=5):
-    """تلخيص النص باستخدام خوارزمية TextRank"""
-    # تقسيم النص إلى جمل
+def summarize_text(text, num_sentences=4):
     sentences = sent_tokenize(text)
-    
     if len(sentences) <= num_sentences:
         return text
     
-    # إزالة كلمات التوقف
     stop_words = set(stopwords.words('arabic') + stopwords.words('english'))
-    
-    # حساب تكرار الكلمات
     word_freq = Counter()
     for sentence in sentences:
         words = re.findall(r'\w+', sentence.lower())
@@ -102,29 +62,20 @@ def summarize_text(text, num_sentences=5):
             if word not in stop_words:
                 word_freq[word] += 1
     
-    # تطبيع التكرارات
     max_freq = max(word_freq.values()) if word_freq else 1
     for word in word_freq:
         word_freq[word] = word_freq[word] / max_freq
     
-    # حساب درجة كل جملة
     sentence_scores = {}
     for sentence in sentences:
         words = re.findall(r'\w+', sentence.lower())
         score = sum(word_freq.get(word, 0) for word in words)
         sentence_scores[sentence] = score
     
-    # اختيار أفضل الجمل
     summarized_sentences = heapq.nlargest(num_sentences, sentence_scores, key=sentence_scores.get)
-    summary = ' '.join(summarized_sentences)
-    
-    return summary
+    return ' '.join(summarized_sentences)
 
-# ========================================
-# دالة تصنيف النص (بسيطة وسريعة)
-# ========================================
 def classify_text(text):
-    """تصنيف النص باستخدام الكلمات المفتاحية"""
     categories = {
         "مالي": ["مال", "اقتصاد", "بنك", "استثمار", "سوق", "أسهم", "دولار", "ربح", "خسارة", "ضريبة"],
         "طبي": ["طبي", "صحي", "مرض", "علاج", "دواء", "جراحة", "تشخيص", "مستشفى", "طبيب", "صحة"],
@@ -141,7 +92,6 @@ def classify_text(text):
     
     text_lower = text.lower()
     category_scores = {}
-    
     for category, keywords in categories.items():
         score = sum(1 for keyword in keywords if keyword in text_lower)
         category_scores[category] = score
@@ -157,8 +107,32 @@ def classify_text(text):
     return best_category, min(confidence, 0.95)
 
 # ========================================
-# رفع الملف
+# واجهة Streamlit
 # ========================================
+st.set_page_config(page_title="ملخص المستندات الذكي", page_icon="📄", layout="wide")
+
+st.markdown("""
+<style>
+    .main-header {
+        background: linear-gradient(135deg, #4A6CF7, #6C4AF7);
+        padding: 30px;
+        border-radius: 15px;
+        text-align: center;
+        color: white;
+        margin-bottom: 30px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="main-header">
+    <h1 style="font-size: 40px; margin: 0;">📄 ملخص المستندات الذكي</h1>
+    <p style="font-size: 18px; opacity: 0.9; margin: 10px 0 0;">
+        رفع ملف، تلخيص، تصنيف، وتقرير PDF
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
 uploaded_file = st.file_uploader("📂 اختر ملف", type=["txt", "pdf", "docx"])
 
 if uploaded_file is not None:
@@ -173,9 +147,6 @@ if uploaded_file is not None:
     with st.expander("📄 النص الأصلي"):
         st.text(clean_text_content[:1000] + ("..." if len(clean_text_content) > 1000 else ""))
 
-    # ========================================
-    # التلخيص (سريع ومضمون)
-    # ========================================
     st.divider()
     st.subheader("📝 الملخص")
 
@@ -185,7 +156,7 @@ if uploaded_file is not None:
     else:
         with st.spinner("⏳ جاري تلخيص النص..."):
             try:
-                summary = summarize_text(clean_text_content, num_sentences=5)
+                summary = summarize_text(clean_text_content, num_sentences=4)
                 st.success("✅ تم التلخيص بنجاح!")
             except Exception as e:
                 st.error(f"❌ مش قادر ألخص النص: {str(e)}")
@@ -193,9 +164,6 @@ if uploaded_file is not None:
 
     st.write(summary)
 
-    # ========================================
-    # التصنيف (سريع ومضمون)
-    # ========================================
     st.divider()
     st.subheader("🏷️ التصنيف")
 
@@ -214,9 +182,6 @@ if uploaded_file is not None:
     with col2:
         st.metric("نسبة الثقة", f"{score:.2%}")
 
-    # ========================================
-    # إحصائيات
-    # ========================================
     st.divider()
     st.subheader("📊 إحصائيات")
 
@@ -232,9 +197,6 @@ if uploaded_file is not None:
     with col3:
         st.metric("عدد الجمل", sentence_count)
 
-    # ========================================
-    # تحميل التقرير (PDF + TXT)
-    # ========================================
     st.divider()
     st.subheader("📥 تحميل التقرير")
 
