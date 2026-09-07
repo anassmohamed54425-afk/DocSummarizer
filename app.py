@@ -27,8 +27,8 @@ def load_models():
     with st.spinner("⏳ جاري تحميل النماذج..."):
         os.environ["USE_TF"] = "1"
         os.environ["TRANSFORMERS_NO_TORCH"] = "1"
-        classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli", framework="tf")
-        summarizer = pipeline("text-generation", model="google/flan-t5-base", framework="tf")
+        classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+        summarizer = pipeline("text-generation", model="google/flan-t5-base")
     return summarizer, classifier
 
 try:
